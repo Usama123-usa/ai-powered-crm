@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import leads, tasks, team, calls, emails, analytics, meetings, vapi_tools
+from mangum import Mangum
 
 app = FastAPI(title="Brown Capital CRM API", version="1.0.0")
 
@@ -25,3 +26,7 @@ app.include_router(vapi_tools.router, tags=["VAPI Tools"])
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "Brown Capital CRM"}
+
+
+# Vercel serverless handler
+handler = Mangum(app, lifespan="off")
