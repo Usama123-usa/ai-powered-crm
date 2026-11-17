@@ -22,8 +22,11 @@ def _format_phone(phone: str) -> str:
         return '+' + digits
     return phone
 
-async def initiate_call(phone_number: str, lead_name: str, lead_id: str) -> dict:
+async def initiate_call(phone_number: str, lead_name: str, lead_id: str,
+                        email: str = "", company: str = "",
+                        industry: str = "", service: str = "") -> dict:
     phone_number = _format_phone(phone_number)
+    phone_last4 = phone_number[-4:] if len(phone_number) >= 4 else phone_number
     headers = {
         "Authorization": f"Bearer {VAPI_API_KEY}",
         "Content-Type": "application/json",
@@ -36,12 +39,15 @@ async def initiate_call(phone_number: str, lead_name: str, lead_id: str) -> dict
             "name": lead_name,
         },
         "assistantOverrides": {
-            # Outbound-specific first message so Aria knows this is an outbound call.
-            # Inbound calls have no firstMessage — the assistant waits for the caller.
-            "firstMessage": "Hello, my name is Aria, I'm calling on behalf of Jarrod Brown from Brown Capital — is this a good time to talk?",
+            "firstMessage": f"Hi, is this {lead_name}? Great — I'm Aria from Brown Capital, just calling to confirm your details real quick. Takes 30 seconds!",
             "variableValues": {
                 "name": lead_name,
                 "lead_id": lead_id,
+                "email": email,
+                "phone_last4": phone_last4,
+                "company": company or "your company",
+                "industry": industry or "your industry",
+                "service": service or "our services",
                 "call_type": "outbound",
             }
         },

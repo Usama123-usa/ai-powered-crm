@@ -6,12 +6,16 @@ from services import vapi_service, email_service, claude_service
 router = APIRouter()
 
 
-async def _trigger_automation(lead_id: str, phone: str, name: str, email: str, company: str, source: str):
+async def _trigger_automation(lead_id: str, phone: str, name: str, email: str, company: str, source: str, industry: str = "", service: str = ""):
     try:
         call_result = await vapi_service.initiate_call(
             phone_number=phone,
             lead_name=name,
             lead_id=lead_id,
+            email=email,
+            company=company,
+            industry=industry,
+            service=service,
         )
         vapi_call_id = call_result.get("id")
         supabase.table("calls").insert({
@@ -102,10 +106,18 @@ async def update_lead(lead_id: str, lead: LeadUpdate, background_tasks: Backgrou
         }).execute()
     # Trigger automation only when Step 2 completes (notes field sent by form)
     if "notes" in data:
-        # Fetch full lead to get phone/email (PATCH only returns updated fields)
         full = supabase.table("leads").select("*").eq("id", lead_id).single().execute()
         lead_full = full.data or {}
         if lead_full.get("phone") and lead_full.get("email"):
+            # Parse industry/service from notes: "Industry: X. Service: Y."
+            notes_text = data.get("notes", "")
+            industry, service = "", ""
+            for part in notes_text.split("."):
+                part = part.strip()
+                if part.startswith("Industry:"):
+                    industry = part.replace("Industry:", "").strip()
+                elif part.startswith("Service:"):
+                    service = part.replace("Service:", "").strip()
             background_tasks.add_task(
                 _trigger_automation,
                 lead_id=lead_id,
@@ -114,6 +126,8 @@ async def update_lead(lead_id: str, lead: LeadUpdate, background_tasks: Backgrou
                 email=lead_full["email"],
                 company=lead_full.get("company", ""),
                 source=lead_full.get("source", "website"),
+                industry=industry,
+                service=service,
             )
     return updated
 
