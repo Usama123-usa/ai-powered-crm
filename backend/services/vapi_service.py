@@ -9,7 +9,21 @@ VAPI_ASSISTANT_ID = os.getenv("VAPI_ASSISTANT_ID")
 VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID")
 VAPI_BASE_URL = "https://api.vapi.ai"
 
+def _format_phone(phone: str) -> str:
+    """Ensure E.164 format for VAPI: +[country][number]"""
+    digits = ''.join(c for c in phone if c.isdigit())
+    if phone.startswith('+'):
+        return '+' + digits
+    # Pakistan numbers: 03xx -> +923xx
+    if digits.startswith('0') and len(digits) == 11:
+        return '+92' + digits[1:]
+    # Already has country code (no leading 0)
+    if len(digits) >= 10:
+        return '+' + digits
+    return phone
+
 async def initiate_call(phone_number: str, lead_name: str, lead_id: str) -> dict:
+    phone_number = _format_phone(phone_number)
     headers = {
         "Authorization": f"Bearer {VAPI_API_KEY}",
         "Content-Type": "application/json",
