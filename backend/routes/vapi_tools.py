@@ -18,31 +18,45 @@ TIME_SLOTS = [
 ]
 
 
-def get_next_available_slots(days: int = 5):
-    """Agle 5 working days ke available slots return karo"""
+def get_next_available_slots(days: int = 3):
+    """Agle working days ke available slots return karo — single DB query"""
     today = datetime.now().date()
-    available = []
+    # Collect next N working days
+    working_days = []
     day = today + timedelta(days=1)
-
-    while len(available) < days:
-        if day.weekday() < 5:  # Mon-Fri only
-            booked = supabase.table("meetings")\
-                .select("meeting_time")\
-                .eq("meeting_date", str(day))\
-                .eq("status", "scheduled")\
-                .execute().data
-            booked_times = [b["meeting_time"] for b in booked]
-            free_slots = [t for t in TIME_SLOTS if t not in booked_times]
-
-            if free_slots:
-                available.append({
-                    "date": str(day),
-                    "day_name": day.strftime("%A"),
-                    "display": day.strftime("%B %d"),
-                    # Sirf pehle 4 slots show karo call mein
-                    "slots": free_slots[:4],
-                })
+    while len(working_days) < days:
+        if day.weekday() < 5:
+            working_days.append(day)
         day += timedelta(days=1)
+
+    if not working_days:
+        return []
+
+    date_strs = [str(d) for d in working_days]
+
+    # Single query for all days
+    booked_rows = supabase.table("meetings")\
+        .select("meeting_date, meeting_time")\
+        .in_("meeting_date", date_strs)\
+        .eq("status", "scheduled")\
+        .execute().data
+
+    booked_map: dict = {}
+    for row in booked_rows:
+        booked_map.setdefault(row["meeting_date"], set()).add(row["meeting_time"])
+
+    available = []
+    for d in working_days:
+        ds = str(d)
+        booked_times = booked_map.get(ds, set())
+        free_slots = [t for t in TIME_SLOTS if t not in booked_times]
+        if free_slots:
+            available.append({
+                "date": ds,
+                "day_name": d.strftime("%A"),
+                "display": d.strftime("%B %d"),
+                "slots": free_slots[:3],  # 3 slots per day keeps response short
+            })
 
     return available
 
