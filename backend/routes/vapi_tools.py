@@ -4,6 +4,7 @@ Jab VAPI assistant ko appointment booking ki zaroorat ho, wo yahan POST karta ha
 """
 from fastapi import APIRouter, Request
 from database.supabase_client import supabase
+from services import email_service
 from datetime import datetime, timedelta
 import json
 
@@ -140,14 +141,22 @@ async def vapi_tool_handler(request: Request):  # noqa: C901
             date_str = args.get("date", "")
             time_str = args.get("time", "")
 
+            # Fallback: extract lead_id from VAPI call metadata if variable didn't resolve
+            if not lead_id or lead_id == "{{lead_id}}":
+                lead_id = (
+                    body.get("message", {}).get("call", {}).get("metadata", {}).get("lead_id", "")
+                    or body.get("call", {}).get("metadata", {}).get("lead_id", "")
+                    or ""
+                )
+
             print(f"book_appointment called: lead_id={lead_id!r}, date={date_str!r}, time={time_str!r}")
 
             if not date_str or not time_str:
                 result_text = "Appointment book karne ke liye date aur time dono chahiye."
             elif not lead_id or lead_id == "{{lead_id}}":
-                # No real lead_id — book without foreign key
+                # Still no lead_id — book without foreign key
                 try:
-                    result = supabase.table("meetings").insert({
+                    supabase.table("meetings").insert({
                         "meeting_date": date_str,
                         "meeting_time": time_str,
                         "title": "Discovery Call with Jarrod Brown",
@@ -162,6 +171,35 @@ async def vapi_tool_handler(request: Request):  # noqa: C901
                 try:
                     res = book_appointment(lead_id, date_str, time_str)
                     result_text = res["message"]
+                    # Send confirmation email if booking succeeded
+                    if res.get("success"):
+                        try:
+                            lead_row = supabase.table("leads").select("email, name, company").eq("id", lead_id).single().execute().data
+                            if lead_row and lead_row.get("email"):
+                                lead_email = lead_row["email"]
+                                lead_name = lead_row.get("name", "Valued Client")
+                                company = lead_row.get("company", "")
+                                from datetime import date as date_cls
+                                y, m, d = map(int, date_str.split("-"))
+                                day_name = date_cls(y, m, d).strftime("%A, %B %d, %Y")
+                                body_text = (
+                                    f"Dear {lead_name},\n\n"
+                                    f"Your appointment with Jarrod Brown has been confirmed!\n\n"
+                                    f"📅 Date: {day_name}\n"
+                                    f"🕐 Time: {time_str}\n"
+                                    f"⏱ Duration: 20 minutes\n\n"
+                                    f"Jarrod Brown will personally connect with you at this time.\n\n"
+                                    f"If you need to reschedule, please reply to this email.\n\n"
+                                    f"Best regards,\nJarrod Brown\nBrown Capital"
+                                )
+                                email_service.send_email(
+                                    to_email=lead_email,
+                                    subject=f"Appointment Confirmed – {day_name} at {time_str}",
+                                    body=body_text,
+                                )
+                                print(f"Confirmation email sent to {lead_email}")
+                        except Exception as email_err:
+                            print(f"Confirmation email error: {email_err}")
                 except Exception as e:
                     print(f"book_appointment error: {e}")
                     result_text = f"Appointment booked for {date_str} at {time_str}. Jarrod will confirm by email."
