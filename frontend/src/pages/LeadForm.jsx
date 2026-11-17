@@ -43,31 +43,38 @@ export default function LeadForm() {
   const validateEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
   const validatePhone = p => p.replace(/\D/g, '').length >= 7
 
-  const handleStep1 = async e => {
+  const handleStep1 = e => {
     e.preventDefault()
     if (!name.trim())          { setError('Full name is required.'); return }
     if (!validateEmail(email)) { setError('Please enter a valid email address.'); return }
     if (!validatePhone(phone)) { setError('Please enter a valid phone number.'); return }
-    setError(''); setSubmitting(true)
-    try {
-      const lead = await leadsApi.create({ name, email, phone, company, source: 'website' })
-      setCreatedLead(lead); setStep(2)
-    } catch (err) {
-      setError(err?.response?.data?.detail || 'Something went wrong. Please try again.')
-    }
-    setSubmitting(false)
+    setError('')
+    // Go to Step 2 instantly — save lead in background
+    setStep(2)
+    leadsApi.create({ name, email, phone, company, source: 'website' })
+      .then(lead => setCreatedLead(lead))
+      .catch(() => {/* will retry on Step 2 submit */})
   }
 
   const handleStep2 = async e => {
     e.preventDefault()
     if (!industry) { setError('Please select your industry.'); return }
-    setError('')
-    if (createdLead && (industry || service)) {
-      await leadsApi.update(createdLead.id, {
+    setError(''); setSubmitting(true)
+    try {
+      let lead = createdLead
+      // If background save didn't finish yet, create now
+      if (!lead) {
+        lead = await leadsApi.create({ name, email, phone, company, source: 'website' })
+        setCreatedLead(lead)
+      }
+      await leadsApi.update(lead.id, {
         notes: `Industry: ${industry}. Service: ${service}. ${message || ''}`.trim()
-      }).catch(() => {})
+      })
+      setSuccess(true)
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Something went wrong. Please try again.')
     }
-    setSuccess(true)
+    setSubmitting(false)
   }
 
 
@@ -280,9 +287,9 @@ export default function LeadForm() {
                     className="flex items-center justify-center gap-2 py-3 px-5 rounded-xl font-semibold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors">
                     <ChevronLeft size={15} /> Back
                   </button>
-                  <button type="submit"
-                    className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] hover:-translate-y-px transition-all duration-200">
-                    Continue <ChevronRight size={15} />
+                  <button type="submit" disabled={submitting}
+                    className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] hover:-translate-y-px transition-all duration-200 disabled:opacity-50">
+                    {submitting ? 'Submitting…' : <><span>Submit</span><ChevronRight size={15} /></>}
                   </button>
                 </div>
               </form>
