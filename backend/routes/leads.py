@@ -6,71 +6,63 @@ from services import vapi_service, email_service, claude_service
 router = APIRouter()
 
 
+async def _trigger_automation(lead_id: str, phone: str, name: str, email: str, company: str, source: str):
+    try:
+        call_result = await vapi_service.initiate_call(
+            phone_number=phone,
+            lead_name=name,
+            lead_id=lead_id,
+        )
+        vapi_call_id = call_result.get("id")
+        supabase.table("calls").insert({
+            "lead_id": lead_id,
+            "vapi_call_id": vapi_call_id,
+            "status": "initiated",
+        }).execute()
+        supabase.table("activities").insert({
+            "lead_id": lead_id,
+            "type": "call",
+            "note": f"AI call initiated to {phone}",
+        }).execute()
+        supabase.table("leads").update({"stage": "called"}).eq("id", lead_id).execute()
+    except Exception as e:
+        print(f"VAPI call error: {e}")
+
+    try:
+        email_data = claude_service.generate_email(
+            lead_name=name,
+            company=company or "",
+            source=source or "website",
+        )
+        sent = email_service.send_email(
+            to_email=email,
+            subject=email_data["subject"],
+            body=email_data["body"],
+        )
+        if sent:
+            supabase.table("emails_sent").insert({
+                "lead_id": lead_id,
+                "subject": email_data["subject"],
+                "body": email_data["body"],
+            }).execute()
+            supabase.table("activities").insert({
+                "lead_id": lead_id,
+                "type": "email",
+                "note": f"Personalized email sent: {email_data['subject']}",
+            }).execute()
+            supabase.table("leads").update({"stage": "emailed"}).eq("id", lead_id).execute()
+    except Exception as e:
+        print(f"Email error: {e}")
+
+
 @router.post("/leads")
-async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
-    # Save lead
+async def create_lead(lead: LeadCreate):
+    # Save lead only — automation triggers on Step 2 (PATCH with notes/industry)
     data = lead.model_dump(exclude_none=True)
     result = supabase.table("leads").insert(data).execute()
     if not result.data:
         raise HTTPException(status_code=400, detail="Failed to create lead")
-
-    new_lead = result.data[0]
-    lead_id = new_lead["id"]
-
-    # Background: trigger VAPI call
-    async def trigger_automation():
-        # Initiate call
-        try:
-            call_result = await vapi_service.initiate_call(
-                phone_number=lead.phone,
-                lead_name=lead.name,
-                lead_id=lead_id,
-            )
-            vapi_call_id = call_result.get("id")
-            supabase.table("calls").insert({
-                "lead_id": lead_id,
-                "vapi_call_id": vapi_call_id,
-                "status": "initiated",
-            }).execute()
-            supabase.table("activities").insert({
-                "lead_id": lead_id,
-                "type": "call",
-                "note": f"AI call initiated to {lead.phone}",
-            }).execute()
-            # Update stage
-            supabase.table("leads").update({"stage": "called"}).eq("id", lead_id).execute()
-        except Exception as e:
-            print(f"VAPI call error: {e}")
-
-        # Generate and send email
-        try:
-            email_data = claude_service.generate_email(
-                lead_name=lead.name,
-                company=lead.company or "",
-                source=lead.source or "website",
-            )
-            sent = email_service.send_email(
-                to_email=lead.email,
-                subject=email_data["subject"],
-                body=email_data["body"],
-            )
-            if sent:
-                supabase.table("emails_sent").insert({
-                    "lead_id": lead_id,
-                    "subject": email_data["subject"],
-                    "body": email_data["body"],
-                }).execute()
-                supabase.table("activities").insert({
-                    "lead_id": lead_id,
-                    "type": "email",
-                    "note": f"Personalized email sent: {email_data['subject']}",
-                }).execute()
-                supabase.table("leads").update({"stage": "emailed"}).eq("id", lead_id).execute()
-        except Exception as e:
-            print(f"Email error: {e}")
-
-    background_tasks.add_task(trigger_automation)
-    return new_lead
+    return result.data[0]
 
 
 @router.get("/leads")
@@ -93,13 +85,14 @@ def get_lead(lead_id: str):
 
 
 @router.patch("/leads/{lead_id}")
-def update_lead(lead_id: str, lead: LeadUpdate):
+async def update_lead(lead_id: str, lead: LeadUpdate, background_tasks: BackgroundTasks):
     data = lead.model_dump(exclude_none=True)
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update")
     result = supabase.table("leads").update(data).eq("id", lead_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Lead not found")
+    updated = result.data[0]
     # Log stage change activity
     if "stage" in data:
         supabase.table("activities").insert({
@@ -107,7 +100,18 @@ def update_lead(lead_id: str, lead: LeadUpdate):
             "type": "stage_change",
             "note": f"Stage changed to {data['stage']}",
         }).execute()
-    return result.data[0]
+    # Trigger automation only when Step 2 completes (notes field sent by form)
+    if "notes" in data and updated.get("phone") and updated.get("email"):
+        background_tasks.add_task(
+            _trigger_automation,
+            lead_id=lead_id,
+            phone=updated["phone"],
+            name=updated["name"],
+            email=updated["email"],
+            company=updated.get("company", ""),
+            source=updated.get("source", "website"),
+        )
+    return updated
 
 
 @router.delete("/leads/{lead_id}")
