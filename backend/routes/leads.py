@@ -101,16 +101,20 @@ async def update_lead(lead_id: str, lead: LeadUpdate, background_tasks: Backgrou
             "note": f"Stage changed to {data['stage']}",
         }).execute()
     # Trigger automation only when Step 2 completes (notes field sent by form)
-    if "notes" in data and updated.get("phone") and updated.get("email"):
-        background_tasks.add_task(
-            _trigger_automation,
-            lead_id=lead_id,
-            phone=updated["phone"],
-            name=updated["name"],
-            email=updated["email"],
-            company=updated.get("company", ""),
-            source=updated.get("source", "website"),
-        )
+    if "notes" in data:
+        # Fetch full lead to get phone/email (PATCH only returns updated fields)
+        full = supabase.table("leads").select("*").eq("id", lead_id).single().execute()
+        lead_full = full.data or {}
+        if lead_full.get("phone") and lead_full.get("email"):
+            background_tasks.add_task(
+                _trigger_automation,
+                lead_id=lead_id,
+                phone=lead_full["phone"],
+                name=lead_full["name"],
+                email=lead_full["email"],
+                company=lead_full.get("company", ""),
+                source=lead_full.get("source", "website"),
+            )
     return updated
 
 
